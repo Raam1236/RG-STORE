@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { useAppContext } from '../hooks/useAppContext';
 import { User, Role } from '../types';
@@ -11,11 +12,14 @@ const BackIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-
 const LoginPage: React.FC = () => {
   const { setCurrentUser, showToast, setIsLoading } = useAppContext();
   
-  // States: 'checking' -> 'create_admin' OR 'selection' -> 'login_admin'/'login_employee'
-  const [view, setView] = useState<'checking' | 'create_admin' | 'selection' | 'login_admin' | 'login_employee'>('checking');
+  // States: 'checking' -> 'create_admin' OR 'selection' -> 'login_admin'/'login_employee' -> 'forgot_password'
+  const [view, setView] = useState<'checking' | 'create_admin' | 'selection' | 'login_admin' | 'login_employee' | 'forgot_password'>('checking');
   
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [recoveryKey, setRecoveryKey] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  
   const [error, setError] = useState('');
   const [isShaking, setIsShaking] = useState(false);
 
@@ -33,9 +37,6 @@ const LoginPage: React.FC = () => {
                   setView('selection');
               }
           } else {
-              // Cloud mode: We assume setup is done or handled via console/first run
-              // For simplicity in this demo app, we just show selection. 
-              // Real apps would check db or rely on auth providers.
               setView('selection');
           }
       };
@@ -99,6 +100,29 @@ const LoginPage: React.FC = () => {
     } else {
         triggerError("Username and password cannot be empty.");
     }
+  };
+
+  const handleRecoverAccount = async (e: React.FormEvent) => {
+      e.preventDefault();
+      // Hardcoded Recovery Key for this Local App version
+      if (recoveryKey === 'RGcreation') {
+          if (newPassword.length < 4) {
+              triggerError("New Password must be at least 4 characters.");
+              return;
+          }
+          
+          const success = await database.recoverLocalAdmin(newPassword);
+          if (success) {
+              showToast("Admin account recovered! Username reset to 'admin'.");
+              setView('login_admin');
+              setUsername('admin');
+              setPassword('');
+          } else {
+              triggerError("Recovery failed. Cloud mode not supported for this method.");
+          }
+      } else {
+          triggerError("Invalid Recovery Key.");
+      }
   };
 
   const handleBackToSelection = () => {
@@ -206,6 +230,7 @@ const LoginPage: React.FC = () => {
                     />
                 </div>
                 {error && <p className={`text-red-500 dark:text-red-400 text-sm text-center ${isShaking ? 'animate-shake' : ''}`}>{error}</p>}
+                
                 <button 
                     type="submit" 
                     className={`w-full py-3 px-4 text-on-primary font-semibold rounded-md transition-colors duration-300 shadow-md ${isAdmin ? 'bg-primary hover:bg-indigo-600' : 'bg-secondary hover:bg-green-600'}`}
@@ -213,9 +238,63 @@ const LoginPage: React.FC = () => {
                     {isAdmin ? 'Access Dashboard' : 'Open POS Terminal'}
                 </button>
             </form>
+            
+            {isAdmin && !database.isCloud && (
+                <div className="text-center mt-4">
+                    <button onClick={() => setView('forgot_password')} className="text-xs text-primary hover:underline">
+                        Forgot Password?
+                    </button>
+                </div>
+            )}
         </div>
       );
   };
+  
+  const renderForgotPassword = () => (
+      <div className="animate-fade-in-down w-full max-w-md bg-surface p-8 rounded-lg shadow-2xl relative">
+          <button 
+              onClick={() => setView('login_admin')} 
+              className="absolute top-4 left-4 text-on-surface/60 hover:text-primary transition-colors flex items-center text-sm font-medium"
+          >
+              <BackIcon /> Cancel
+          </button>
+          
+          <div className="text-center mb-6 mt-4">
+               <h2 className="text-xl font-bold text-on-surface">Recover Admin Account</h2>
+               <p className="text-sm text-on-surface/60 mt-2">Enter the Master Recovery Key provided by your developer.</p>
+          </div>
+          
+          <form onSubmit={handleRecoverAccount} className="space-y-4">
+              <div>
+                  <label className="block text-sm font-medium text-on-surface">Recovery Code</label>
+                  <input 
+                      type="password" 
+                      value={recoveryKey} 
+                      onChange={e => setRecoveryKey(e.target.value)} 
+                      placeholder="Enter Master Key"
+                      className="w-full p-3 mt-1 bg-background border border-on-surface/20 rounded-md text-on-surface" 
+                  />
+              </div>
+              <div>
+                  <label className="block text-sm font-medium text-on-surface">New Admin Password</label>
+                  <input 
+                      type="text" 
+                      value={newPassword} 
+                      onChange={e => setNewPassword(e.target.value)} 
+                      placeholder="Set new password"
+                      className="w-full p-3 mt-1 bg-background border border-on-surface/20 rounded-md text-on-surface" 
+                  />
+              </div>
+               {error && <p className={`text-red-500 dark:text-red-400 text-sm text-center ${isShaking ? 'animate-shake' : ''}`}>{error}</p>}
+               <button 
+                  type="submit" 
+                  className="w-full py-3 px-4 bg-orange-500 text-white font-semibold rounded-md hover:bg-orange-600 transition-colors duration-300 shadow-md"
+              >
+                  Reset Account
+              </button>
+          </form>
+      </div>
+  );
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-background p-4 flex-col">
@@ -238,6 +317,7 @@ const LoginPage: React.FC = () => {
         {view === 'create_admin' && renderCreateAdminForm()}
         {view === 'selection' && renderPortalSelection()}
         {(view === 'login_admin' || view === 'login_employee') && renderLoginForm()}
+        {view === 'forgot_password' && renderForgotPassword()}
 
         {/* Footer */}
         {!database.isCloud && view !== 'checking' && (

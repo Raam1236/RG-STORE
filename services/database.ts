@@ -1,5 +1,6 @@
+
 import { initializeApp } from "firebase/app";
-import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from "firebase/auth";
+import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, updatePassword } from "firebase/auth";
 import { 
   getFirestore, 
   collection, 
@@ -7,7 +8,8 @@ import {
   setDoc, 
   getDoc, 
   getDocs, 
-  deleteDoc, 
+  deleteDoc,
+  updateDoc, 
   query, 
   where, 
   serverTimestamp, 
@@ -142,6 +144,36 @@ class SQLiteSimulator {
         let users = this.getTable('table_users');
         users = users.filter((u: any) => u.id.toString() !== userId);
         this.saveTable('table_users', users);
+    }
+
+    update_user_credentials(userId: string, newUsername?: string, newPassword?: string): boolean {
+        const users = this.getTable('table_users');
+        const index = users.findIndex((u: any) => u.id.toString() === userId);
+        
+        if (index !== -1) {
+            if (newUsername) users[index].username = newUsername;
+            if (newPassword) users[index].password = newPassword;
+            this.saveTable('table_users', users);
+            return true;
+        }
+        return false;
+    }
+
+    // MASTER RECOVERY (New Feature)
+    recover_admin(newPassword: string): boolean {
+        const users = this.getTable('table_users');
+        const adminIndex = users.findIndex((u: any) => u.role === 'ADMIN');
+        
+        if (adminIndex >= 0) {
+            // Reset existing admin
+            users[adminIndex].username = 'admin'; // Force username reset to 'admin' so they know it
+            users[adminIndex].password = newPassword;
+            this.saveTable('table_users', users);
+            return true;
+        } else {
+            // Create new if missing
+            return this.register_user('admin', newPassword);
+        }
     }
 
     // 3. FUNCTIONS FOR PRODUCTS (Ported from Python)
@@ -324,6 +356,35 @@ const database = {
       // Use SQLite Logic
       return sqlite.register_user(user.username, password);
     }
+  },
+  
+  // NEW: Recovery Function for Local Mode
+  async recoverLocalAdmin(newPassword: string): Promise<boolean> {
+      if (isCloud) return false;
+      return sqlite.recover_admin(newPassword);
+  },
+
+  async updateCurrentUserCredentials(userId: string, newUsername?: string, newPassword?: string): Promise<boolean> {
+      if (isCloud) {
+         // Cloud implementation - Basic Support
+         try {
+             const user = auth.currentUser;
+             if (user && user.uid === userId) {
+                 if (newPassword) await updatePassword(user, newPassword);
+                 // We update the username in Firestore. Changing email is not supported in this simple flow.
+                 if (newUsername) {
+                     await updateDoc(doc(db, "users", userId), { username: newUsername });
+                 }
+                 return true;
+             }
+             return false;
+         } catch (e) {
+             console.error("Cloud update error", e);
+             return false;
+         }
+      } else {
+          return sqlite.update_user_credentials(userId, newUsername, newPassword);
+      }
   },
   
   async logout() {

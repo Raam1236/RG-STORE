@@ -5,10 +5,17 @@ import { ShopDetails } from '../../types';
 import database from '../../services/database';
 
 const ShopSettings: React.FC = () => {
-    const { shopDetails, updateShopDetails, showToast } = useAppContext();
+    const { shopDetails, updateShopDetails, showToast, currentUser, setCurrentUser } = useAppContext();
     const [details, setDetails] = useState<ShopDetails>(shopDetails);
     const [bankDetails, setBankDetails] = useState(shopDetails.bankDetails || { accountName: '', accountNumber: '', bankName: '', ifscCode: '' });
     const fileInputRef = useRef<HTMLInputElement>(null);
+
+    // Admin Credentials State
+    const [adminCreds, setAdminCreds] = useState({ 
+        username: currentUser?.username || '', 
+        password: '', 
+        confirmPassword: '' 
+    });
 
     useEffect(() => {
         setDetails(shopDetails);
@@ -66,6 +73,33 @@ const ShopSettings: React.FC = () => {
             }
         };
         reader.readAsText(file);
+    };
+
+    const handleUpdateAdminCreds = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!currentUser) return;
+
+        if (adminCreds.password && adminCreds.password !== adminCreds.confirmPassword) {
+            showToast("Passwords do not match!", "error");
+            return;
+        }
+
+        const success = await database.updateCurrentUserCredentials(
+            currentUser.id, 
+            adminCreds.username, 
+            adminCreds.password || undefined
+        );
+
+        if (success) {
+            showToast("Admin credentials updated successfully!");
+            // Update local state if username changed
+            if (adminCreds.username !== currentUser.username) {
+                setCurrentUser({ ...currentUser, username: adminCreds.username });
+            }
+            setAdminCreds(prev => ({ ...prev, password: '', confirmPassword: '' }));
+        } else {
+            showToast("Failed to update credentials. Try again.", "error");
+        }
     };
 
     return (
@@ -175,40 +209,85 @@ const ShopSettings: React.FC = () => {
                 </div>
             </form>
 
-            {/* Database Management */}
-            <div className="mt-8 bg-surface p-8 rounded-lg shadow-md">
-                 <h2 className="text-xl font-semibold text-on-surface mb-6 border-b border-on-surface/20 pb-2">Database Tools</h2>
-                 {!database.isCloud ? (
-                     <div className="flex gap-4">
-                         <div className="flex-1 p-4 border border-on-surface/20 rounded-lg bg-background">
-                             <h3 className="font-bold text-on-surface mb-2">Backup Data</h3>
-                             <button onClick={handleBackup} className="w-full py-2 bg-secondary text-white rounded hover:bg-green-600 transition flex justify-center items-center gap-2">
-                                 <DownloadIcon /> Download Backup
-                             </button>
-                         </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mt-8">
+                {/* Admin Security Section */}
+                <div className="bg-surface p-8 rounded-lg shadow-md border-l-4 border-orange-500">
+                     <h2 className="text-xl font-semibold text-on-surface mb-6 border-b border-on-surface/20 pb-2">Admin Account Security</h2>
+                     <form onSubmit={handleUpdateAdminCreds} className="space-y-4">
+                        <div>
+                            <label className="block text-sm font-medium text-on-surface mb-1">Admin ID / Username</label>
+                            <input
+                                type="text"
+                                value={adminCreds.username}
+                                onChange={(e) => setAdminCreds({...adminCreds, username: e.target.value})}
+                                className="w-full p-3 bg-background border border-on-surface/20 rounded-md text-on-surface"
+                                required
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-on-surface mb-1">New Password (Optional)</label>
+                            <input
+                                type="password"
+                                value={adminCreds.password}
+                                onChange={(e) => setAdminCreds({...adminCreds, password: e.target.value})}
+                                placeholder="Leave empty to keep current"
+                                className="w-full p-3 bg-background border border-on-surface/20 rounded-md text-on-surface"
+                            />
+                        </div>
+                        {adminCreds.password && (
+                            <div className="animate-fade-in-down">
+                                <label className="block text-sm font-medium text-on-surface mb-1">Confirm New Password</label>
+                                <input
+                                    type="password"
+                                    value={adminCreds.confirmPassword}
+                                    onChange={(e) => setAdminCreds({...adminCreds, confirmPassword: e.target.value})}
+                                    placeholder="Confirm password"
+                                    className="w-full p-3 bg-background border border-on-surface/20 rounded-md text-on-surface"
+                                    required
+                                />
+                            </div>
+                        )}
+                        <button type="submit" className="w-full py-2 bg-orange-500 text-white font-semibold rounded hover:bg-orange-600 transition">
+                            Update Credentials
+                        </button>
+                     </form>
+                </div>
 
-                         <div className="flex-1 p-4 border border-on-surface/20 rounded-lg bg-background">
-                             <h3 className="font-bold text-on-surface mb-2">Restore Data</h3>
-                             <input 
-                                 type="file" 
-                                 ref={fileInputRef} 
-                                 onChange={handleFileChange} 
-                                 accept=".json" 
-                                 className="hidden" 
-                             />
-                             <button onClick={handleRestoreClick} className="w-full py-2 bg-primary text-white rounded hover:bg-indigo-600 transition flex justify-center items-center gap-2">
-                                 <UploadIcon /> Upload & Restore
-                             </button>
-                         </div>
-                     </div>
-                 ) : (
-                     <div className="text-center p-6 bg-blue-500/10 rounded-lg border border-blue-500/30">
-                         <h3 className="font-bold text-blue-400 mb-2">Cloud Mode Active</h3>
-                         <p className="text-sm text-on-surface/80">
-                             Data managed via Firebase Cloud.
-                         </p>
-                     </div>
-                 )}
+                {/* Database Management */}
+                <div className="bg-surface p-8 rounded-lg shadow-md">
+                    <h2 className="text-xl font-semibold text-on-surface mb-6 border-b border-on-surface/20 pb-2">Database Tools</h2>
+                    {!database.isCloud ? (
+                        <div className="flex flex-col gap-4">
+                            <div className="p-4 border border-on-surface/20 rounded-lg bg-background">
+                                <h3 className="font-bold text-on-surface mb-2">Backup Data</h3>
+                                <button onClick={handleBackup} className="w-full py-2 bg-secondary text-white rounded hover:bg-green-600 transition flex justify-center items-center gap-2">
+                                    <DownloadIcon /> Download Backup
+                                </button>
+                            </div>
+
+                            <div className="p-4 border border-on-surface/20 rounded-lg bg-background">
+                                <h3 className="font-bold text-on-surface mb-2">Restore Data</h3>
+                                <input 
+                                    type="file" 
+                                    ref={fileInputRef} 
+                                    onChange={handleFileChange} 
+                                    accept=".json" 
+                                    className="hidden" 
+                                />
+                                <button onClick={handleRestoreClick} className="w-full py-2 bg-primary text-white rounded hover:bg-indigo-600 transition flex justify-center items-center gap-2">
+                                    <UploadIcon /> Upload & Restore
+                                </button>
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="text-center p-6 bg-blue-500/10 rounded-lg border border-blue-500/30">
+                            <h3 className="font-bold text-blue-400 mb-2">Cloud Mode Active</h3>
+                            <p className="text-sm text-on-surface/80">
+                                Data managed via Firebase Cloud.
+                            </p>
+                        </div>
+                    )}
+                </div>
             </div>
         </div>
     );
