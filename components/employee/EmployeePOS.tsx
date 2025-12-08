@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { useAppContext } from '../../hooks/useAppContext';
 import { Product, BillItem, Bill } from '../../types';
@@ -241,6 +240,7 @@ const EmployeePOS: React.FC = () => {
     const [searchTerm, setSearchTerm] = useState('');
     const [invoiceReady, setInvoiceReady] = useState<Bill | null>(null);
     const audioContextRef = useRef<AudioContext | null>(null);
+    const recognitionRef = useRef<any>(null);
     
     // UI Toggles
     const [discountModal, setDiscountModal] = useState<{ isOpen: boolean; target: string | 'bill'; itemName: string } | null>(null);
@@ -475,32 +475,67 @@ const EmployeePOS: React.FC = () => {
 
     const toggleVoiceListening = () => {
         if (isVoiceListening) {
+            recognitionRef.current?.stop();
             setIsVoiceListening(false);
             return;
         }
+
         if (!('webkitSpeechRecognition' in window)) {
             showToast("Voice not supported", "error");
             return;
         }
-        const recognition = new (window as any).webkitSpeechRecognition();
-        recognition.continuous = false;
+
+        const SpeechRecognition = (window as any).webkitSpeechRecognition;
+        const recognition = new SpeechRecognition();
+        recognitionRef.current = recognition;
+        
+        recognition.continuous = false; // Capture one command at a time for speed
+        recognition.interimResults = false; // Ignore partial results, wait for completion
         recognition.lang = 'en-US';
-        recognition.onstart = () => { setIsVoiceListening(true); showToast("Listening..."); };
-        recognition.onend = () => setIsVoiceListening(false);
+
+        recognition.onstart = () => { 
+            setIsVoiceListening(true); 
+            showToast("🎤 Listening...", "success");
+        };
+        
+        recognition.onend = () => { 
+            setIsVoiceListening(false); 
+        };
+        
+        recognition.onerror = (e: any) => {
+            console.error(e);
+            setIsVoiceListening(false);
+            showToast("Voice Error. Try again.", "error");
+        };
+
         recognition.onresult = async (event: any) => {
             const transcript = event.results[0][0].transcript;
-            showToast(`Cmd: "${transcript}"`);
+            showToast(`Processing: "${transcript}"...`);
             setIsProcessingVoice(true);
+            
+            // Fast API call
             const result = await processVoiceCommand(transcript, products);
             setIsProcessingVoice(false);
+            
             if (result) {
                 if (result.type === 'ADD_ITEM' && result.productId) {
                     const product = products.find(p => p.id === result.productId);
-                    if (product) addToBill(product, result.quantity || 1);
-                } else if (result.type === 'CHECKOUT') handleCheckout();
-                else if (result.type === 'CLEAR_BILL') handleClearBill();
+                    if (product) {
+                        addToBill(product, result.quantity || 1);
+                        showToast(`Added ${product.name}`, "success");
+                    } else {
+                        showToast("Item not found", "error");
+                    }
+                } else if (result.type === 'CHECKOUT') {
+                    handleCheckout();
+                } else if (result.type === 'CLEAR_BILL') {
+                    handleClearBill();
+                }
+            } else {
+                showToast("Command not recognized", "error");
             }
         };
+        
         recognition.start();
     };
 
