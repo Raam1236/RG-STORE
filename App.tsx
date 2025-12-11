@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useCallback } from 'react';
 import { Role, User, Product, Bill, ShopDetails, Sale, Customer, StockLogEntry } from './types';
 import { AppContext } from './hooks/AppContext';
@@ -147,40 +148,53 @@ const App: React.FC = () => {
 
   // --- Data Loading ---
   useEffect(() => {
-    const loadData = async () => {
+    const loadCriticalData = async () => {
       setIsLoading(true);
       try {
-        const [loadedProducts, loadedEmployees, loadedCustomers, loadedSales, loadedShop] = await Promise.all([
+        // 1. Load Critical Data First (Products, Shop Details, Employees)
+        // This ensures the POS can be usable almost immediately
+        const [loadedProducts, loadedShop, loadedEmployees] = await Promise.all([
           database.getProducts(),
-          database.getEmployees(),
-          database.getCustomers(),
-          database.getSales(),
-          database.getShopDetails()
+          database.getShopDetails(),
+          database.getEmployees()
         ]);
 
-        // Seed products if empty (Demo purposes)
         if (loadedProducts.length === 0 && !database.isCloud) {
             setProducts(initialProductsMock);
-            // Save mock data to local storage immediately so it persists
             initialProductsMock.forEach(p => database.saveProduct(p));
         } else {
             setProducts(loadedProducts);
         }
 
-        setEmployees(loadedEmployees);
-        setCustomers(loadedCustomers);
-        setSales(loadedSales);
         if (loadedShop) setShopDetails(loadedShop);
+        setEmployees(loadedEmployees);
+        
+        // 2. Unblock UI - App is now interactive
+        setIsLoading(false);
+
+        // 3. Load Heavy Data in Background (Sales, Customers)
+        // Use timeout to push this to next tick
+        setTimeout(async () => {
+             try {
+                const [loadedSales, loadedCustomers] = await Promise.all([
+                    database.getSales(),
+                    database.getCustomers()
+                ]);
+                setSales(loadedSales);
+                setCustomers(loadedCustomers);
+             } catch (bgError) {
+                 console.error("Background data load error", bgError);
+             }
+        }, 100);
 
       } catch (error) {
-        console.error("Data load error", error);
-        showToast("Error loading data", "error");
-      } finally {
+        console.error("Critical Data load error", error);
+        showToast("Error loading critical data", "error");
         setIsLoading(false);
       }
     };
 
-    loadData();
+    loadCriticalData();
   }, []);
 
   // --- Persistence Wrappers ---
@@ -231,11 +245,13 @@ const App: React.FC = () => {
       customerMobile: bill.customerMobile
     };
 
-    // Optimistic Update
+    // Optimistic Update: Update UI instantly
     setSales(prev => [...prev, newSale]);
-    await database.addSale(newSale);
     
-    // Update Stocks
+    // Async DB update
+    database.addSale(newSale).catch(err => console.error("Failed to sync sale", err));
+    
+    // Optimistic Stock Update
     const updatedProducts = [...products];
     for (const item of bill.items) {
         const productIndex = updatedProducts.findIndex(p => p.id === item.id);
@@ -257,8 +273,8 @@ const App: React.FC = () => {
             product.stockHistory = [...(product.stockHistory || []), logEntry];
             updatedProducts[productIndex] = product;
             
-            // Persist
-            await database.saveProduct(product);
+            // Async DB Save
+            database.saveProduct(product).catch(err => console.error("Failed to sync stock", err));
         }
     }
     setProducts(updatedProducts);

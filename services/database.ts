@@ -13,7 +13,9 @@ import {
   query, 
   where, 
   serverTimestamp, 
-  Timestamp 
+  Timestamp,
+  orderBy,
+  limit
 } from "firebase/firestore";
 import { firebaseConfig, isFirebaseConfigured } from "./firebaseConfig";
 import { Product, Sale, Customer, User, Role, ShopDetails } from "../types";
@@ -37,71 +39,76 @@ if (isCloud) {
 }
 
 // --- SQLite Simulation (Local Mode) ---
-// Mimics the provided Python sqlite3 code structure using LocalStorage as the 'file'
+// OPTIMIZED: Uses In-Memory Cache to prevent slow JSON.parse() on every operation
 
 class SQLiteSimulator {
-    private dbName = 'shop.db';
+    // In-memory cache
+    private cache: { [key: string]: any[] } = {};
+    private shopDetailsCache: ShopDetails | null = null;
     
     constructor() {
-        this.create_database();
+        this.init();
     }
 
-    // 1. SETUP THE DATABASE (Ported from Python)
-    private create_database() {
-        // Simulating: CREATE TABLE IF NOT EXISTS users...
-        if (!localStorage.getItem('table_users')) {
-            localStorage.setItem('table_users', JSON.stringify([]));
-        }
-        // Simulating: CREATE TABLE IF NOT EXISTS products...
-        if (!localStorage.getItem('table_products')) {
-            localStorage.setItem('table_products', JSON.stringify([]));
-        }
-        // Extension for App: Sales & Customers (Not in original Python, but needed for App)
-        if (!localStorage.getItem('table_sales')) {
-            localStorage.setItem('table_sales', JSON.stringify([]));
-        }
-        if (!localStorage.getItem('table_customers')) {
-            localStorage.setItem('table_customers', JSON.stringify([]));
-        }
-        if (!localStorage.getItem('table_shop_details')) {
-            localStorage.setItem('table_shop_details', JSON.stringify(null));
-        }
+    private init() {
+        // Initialize tables if missing
+        if (!localStorage.getItem('table_users')) localStorage.setItem('table_users', JSON.stringify([]));
+        if (!localStorage.getItem('table_products')) localStorage.setItem('table_products', JSON.stringify([]));
+        if (!localStorage.getItem('table_sales')) localStorage.setItem('table_sales', JSON.stringify([]));
+        if (!localStorage.getItem('table_customers')) localStorage.setItem('table_customers', JSON.stringify([]));
+        if (!localStorage.getItem('table_shop_details')) localStorage.setItem('table_shop_details', JSON.stringify(null));
+
+        // Load into memory (RAM) for speed
+        this.cache['table_users'] = this.loadFromDisk('table_users');
+        this.cache['table_products'] = this.loadFromDisk('table_products');
+        this.cache['table_sales'] = this.loadFromDisk('table_sales');
+        this.cache['table_customers'] = this.loadFromDisk('table_customers');
+        
+        const details = localStorage.getItem('table_shop_details');
+        this.shopDetailsCache = details ? JSON.parse(details) : null;
     }
 
-    // Helper to get table data
-    private getTable(tableName: string): any[] {
+    private loadFromDisk(tableName: string): any[] {
         const data = localStorage.getItem(tableName);
         return data ? JSON.parse(data) : [];
     }
 
-    // Helper to save table data
+    // Helper to get table data (READ from RAM)
+    private getTable(tableName: string): any[] {
+        return this.cache[tableName] || [];
+    }
+
+    // Helper to save table data (WRITE to RAM & Disk)
     private saveTable(tableName: string, data: any[]) {
-        localStorage.setItem(tableName, JSON.stringify(data));
+        this.cache[tableName] = data; // Update RAM immediately
+        // Async write to disk to not block UI (simulated)
+        setTimeout(() => {
+            localStorage.setItem(tableName, JSON.stringify(data));
+        }, 0);
     }
 
     // 2. FUNCTIONS FOR LOGIN SYSTEM (Ported from Python)
     register_user(username: string, password: string): boolean {
         const users = this.getTable('table_users');
         
-        // UNIQUE constraint check
         if (users.find((u: any) => u.username === username)) {
-            return false; // IntegrityError equivalent
+            return false;
         }
 
         const newUser = {
-            id: users.length + 1, // AUTOINCREMENT
+            id: users.length + 1,
             username,
             password,
-            role: 'ADMIN' // Defaulting to Admin for local registration
+            role: 'ADMIN'
         };
 
-        users.push(newUser);
-        this.saveTable('table_users', users);
+        // Mutation must be careful with reference, best to clone or push
+        const newUsers = [...users, newUser]; 
+        this.saveTable('table_users', newUsers);
         return true;
     }
 
     check_login(username: string, password: string): User | null {
-        // SELECT * FROM users WHERE username = ? AND password = ?
         const users = this.getTable('table_users');
         const user = users.find((u: any) => u.username === username && u.password === password);
         
@@ -109,16 +116,15 @@ class SQLiteSimulator {
             return {
                 id: user.id.toString(),
                 username: user.username,
-                role: (user.role as Role) || Role.EMPLOYEE // Mapping back to App Types
+                role: (user.role as Role) || Role.EMPLOYEE
             };
         }
-        return null; // None
+        return null;
     }
 
-    // Additional function to match App's 'Employees' feature
     save_employee(user: User, password?: string) {
-        const users = this.getTable('table_users');
-        const existingIndex = users.findIndex((u: any) => u.username === user.username); // Using username as unique key for employees
+        const users = [...this.getTable('table_users')];
+        const existingIndex = users.findIndex((u: any) => u.username === user.username);
 
         if (existingIndex >= 0) {
             users[existingIndex] = { ...users[existingIndex], ...user, password: password || users[existingIndex].password };
@@ -147,7 +153,7 @@ class SQLiteSimulator {
     }
 
     update_user_credentials(userId: string, newUsername?: string, newPassword?: string): boolean {
-        const users = this.getTable('table_users');
+        const users = [...this.getTable('table_users')];
         const index = users.findIndex((u: any) => u.id.toString() === userId);
         
         if (index !== -1) {
@@ -159,37 +165,30 @@ class SQLiteSimulator {
         return false;
     }
 
-    // MASTER RECOVERY (New Feature)
     recover_admin(newPassword: string): boolean {
-        const users = this.getTable('table_users');
+        const users = [...this.getTable('table_users')];
         const adminIndex = users.findIndex((u: any) => u.role === 'ADMIN');
         
         if (adminIndex >= 0) {
-            // Reset existing admin
-            users[adminIndex].username = 'admin'; // Force username reset to 'admin' so they know it
+            users[adminIndex].username = 'admin'; 
             users[adminIndex].password = newPassword;
             this.saveTable('table_users', users);
             return true;
         } else {
-            // Create new if missing
             return this.register_user('admin', newPassword);
         }
     }
 
-    // 3. FUNCTIONS FOR PRODUCTS (Ported from Python)
+    // 3. FUNCTIONS FOR PRODUCTS
     add_product(product: Product) {
-        const products = this.getTable('table_products');
-        
-        // Logic to handle "INSERT OR UPDATE" for the app's editing capability
+        const products = [...this.getTable('table_products')];
         const existingIndex = products.findIndex((p: any) => p.id === product.id);
 
-        // Mapping App Schema to Python Schema (and preserving extra fields)
         const row = {
             id: product.id,
-            product_name: product.name, // Python: product_name
-            price: product.price,       // Python: price
-            quantity: product.stock,    // Python: quantity
-            // Extra columns to support App UI
+            product_name: product.name,
+            price: product.price,
+            quantity: product.stock,
             brand: product.brand,
             expireDate: product.expireDate,
             stockHistory: product.stockHistory
@@ -205,15 +204,12 @@ class SQLiteSimulator {
     }
 
     get_all_products(): Product[] {
-        // SELECT * FROM products
         const rows = this.getTable('table_products');
-        
-        // Map Python schema back to App Interface
         return rows.map((row: any) => ({
             id: row.id,
-            name: row.product_name, // Mapping back
+            name: row.product_name,
             price: row.price,
-            stock: row.quantity,    // Mapping back
+            stock: row.quantity,
             brand: row.brand || 'Generic',
             expireDate: row.expireDate || '',
             stockHistory: row.stockHistory || []
@@ -226,14 +222,12 @@ class SQLiteSimulator {
         this.saveTable('table_products', products);
     }
 
-    // --- Extensions for Sales & Customers (Required for App to function) ---
-    
     get_all_sales(): Sale[] {
         return this.getTable('table_sales');
     }
 
     add_sale(sale: Sale) {
-        const sales = this.getTable('table_sales');
+        const sales = [...this.getTable('table_sales')];
         sales.push(sale);
         this.saveTable('table_sales', sales);
     }
@@ -243,7 +237,7 @@ class SQLiteSimulator {
     }
 
     save_customer(customer: Customer) {
-        const customers = this.getTable('table_customers');
+        const customers = [...this.getTable('table_customers')];
         const index = customers.findIndex((c: any) => c.id === customer.id);
         if (index >= 0) customers[index] = customer;
         else customers.push(customer);
@@ -257,29 +251,21 @@ class SQLiteSimulator {
     }
 
     get_shop_details(): ShopDetails | null {
-        const data = localStorage.getItem('table_shop_details');
-        if (data) {
-            try {
-                return JSON.parse(data);
-            } catch (e) {
-                return null;
-            }
-        }
-        return null;
+        return this.shopDetailsCache;
     }
 
     save_shop_details(details: ShopDetails) {
+        this.shopDetailsCache = details;
         localStorage.setItem('table_shop_details', JSON.stringify(details));
     }
 
-    // --- Database Backup/Restore ---
     export_database(): string {
         const data = {
             users: this.getTable('table_users'),
             products: this.getTable('table_products'),
             sales: this.getTable('table_sales'),
             customers: this.getTable('table_customers'),
-            shop_details: this.getTable('table_shop_details')
+            shop_details: this.shopDetailsCache
         };
         return JSON.stringify(data, null, 2);
     }
@@ -291,7 +277,7 @@ class SQLiteSimulator {
             if (data.products) this.saveTable('table_products', data.products);
             if (data.sales) this.saveTable('table_sales', data.sales);
             if (data.customers) this.saveTable('table_customers', data.customers);
-            if (data.shop_details) this.saveTable('table_shop_details', data.shop_details);
+            if (data.shop_details) this.save_shop_details(data.shop_details);
             return true;
         } catch (e) {
             console.error("Import failed", e);
@@ -333,7 +319,6 @@ const database = {
         return null;
       }
     } else {
-      // Use SQLite Logic
       return sqlite.check_login(usernameOrEmail, password);
     }
   },
@@ -353,12 +338,10 @@ const database = {
         return false;
       }
     } else {
-      // Use SQLite Logic
       return sqlite.register_user(user.username, password);
     }
   },
   
-  // NEW: Recovery Function for Local Mode
   async recoverLocalAdmin(newPassword: string): Promise<boolean> {
       if (isCloud) return false;
       return sqlite.recover_admin(newPassword);
@@ -366,12 +349,10 @@ const database = {
 
   async updateCurrentUserCredentials(userId: string, newUsername?: string, newPassword?: string): Promise<boolean> {
       if (isCloud) {
-         // Cloud implementation - Basic Support
          try {
              const user = auth.currentUser;
              if (user && user.uid === userId) {
                  if (newPassword) await updatePassword(user, newPassword);
-                 // We update the username in Firestore. Changing email is not supported in this simple flow.
                  if (newUsername) {
                      await updateDoc(doc(db, "users", userId), { username: newUsername });
                  }
@@ -394,6 +375,7 @@ const database = {
   // --- Products ---
   async getProducts(): Promise<Product[]> {
     if (isCloud) {
+      // Optimizing Firestore Read
       const querySnapshot = await getDocs(collection(db, "products"));
       return querySnapshot.docs.map(docData => {
          const data = docData.data();
@@ -408,7 +390,6 @@ const database = {
          } as Product;
       });
     } else {
-      // Use SQLite Logic
       return sqlite.get_all_products();
     }
   },
@@ -429,7 +410,6 @@ const database = {
       };
       await setDoc(docRef, productData, { merge: true }); 
     } else {
-      // Use SQLite Logic
       sqlite.add_product(product);
     }
   },
@@ -440,9 +420,18 @@ const database = {
   },
 
   // --- Sales ---
-  async getSales(): Promise<Sale[]> {
+  async getSales(limitCount?: number): Promise<Sale[]> {
     if (isCloud) {
-      const q = query(collection(db, "sales")); 
+      let q;
+      // Optimize Cloud: If limit provided (e.g. for dashboard recent activity), use it.
+      // Note: We normally need ALL sales for total revenue stats. 
+      // For now, we order by date to ensure consistency.
+      if (limitCount) {
+         q = query(collection(db, "sales"), orderBy("saleDate", "desc"), limit(limitCount));
+      } else {
+         q = query(collection(db, "sales"), orderBy("saleDate", "desc"));
+      }
+      
       const querySnapshot = await getDocs(q);
       return querySnapshot.docs.map(docData => {
           const data = docData.data();
@@ -457,7 +446,8 @@ const database = {
           } as Sale;
       });
     } else {
-      return sqlite.get_all_sales();
+      const sales = sqlite.get_all_sales();
+      return sales.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
     }
   },
 
