@@ -9,6 +9,8 @@ const ERPNetwork: React.FC = () => {
     const [config, setConfig] = useState(firebaseConfig);
     const [isConnected, setIsConnected] = useState(database.isCloud);
     const [showConfigParams, setShowConfigParams] = useState(false);
+    const [isImporting, setIsImporting] = useState(false);
+    const [importCode, setImportCode] = useState('');
     
     // For syncing other computers
     const [configString, setConfigString] = useState('');
@@ -26,13 +28,46 @@ const ERPNetwork: React.FC = () => {
     };
 
     const handleConnect = () => {
+        // 1. Basic Requirement Check
         if (!config.apiKey || !config.projectId) {
             showToast("API Key and Project ID are required", "error");
             return;
         }
+
+        // 2. API Key Validation (Prevent Project Numbers)
+        // Project numbers are all digits. API Keys usually start with AIza.
+        if (/^\d+$/.test(config.apiKey)) {
+            alert("⚠️ INVALID API KEY DETECTED\n\nYou entered a Project Number (digits only).\nA Firebase API Key usually starts with 'AIza...'.\n\nPlease go to Firebase Console > Project Settings > General > Web API Key.");
+            return;
+        }
         
+        if (!config.apiKey.startsWith('AIza')) {
+            if (!window.confirm("⚠️ Suspicious API Key\n\nMost Firebase API Keys start with 'AIza'. Yours does not.\nAre you sure this is correct?")) {
+                return;
+            }
+        }
+
+        // 3. Auth Domain Validation (Prevent Website URLs)
+        if (config.authDomain) {
+            if (config.authDomain.startsWith('http')) {
+                alert("⚠️ INVALID AUTH DOMAIN\n\nPlease remove 'https://' and 'http://'.\nIt should look like: 'project-id.firebaseapp.com'");
+                return;
+            }
+            if (config.authDomain.includes('netlify.app') || config.authDomain.includes('vercel.app')) {
+                 alert("⚠️ INVALID AUTH DOMAIN\n\nYou entered your hosting URL.\nThe Auth Domain is found in Firebase Console and ends with '.firebaseapp.com'.");
+                 return;
+            }
+        }
+
+        // 4. Clean up placeholders
+        const cleanConfig = { ...config };
+        if (cleanConfig.authDomain?.includes('YOUR_')) cleanConfig.authDomain = `${cleanConfig.projectId}.firebaseapp.com`;
+        if (cleanConfig.storageBucket?.includes('YOUR_')) cleanConfig.storageBucket = `${cleanConfig.projectId}.appspot.com`;
+        if (cleanConfig.messagingSenderId?.includes('YOUR_')) cleanConfig.messagingSenderId = '';
+        if (cleanConfig.appId?.includes('YOUR_')) cleanConfig.appId = '';
+
         if (window.confirm("Connecting to ERP Cloud will reload the application. Continue?")) {
-            saveERPConfig(config);
+            saveERPConfig(cleanConfig);
             window.location.reload();
         }
     };
@@ -44,18 +79,32 @@ const ERPNetwork: React.FC = () => {
         }
     };
 
-    const handleImportString = () => {
-        const input = prompt("Paste the ERP Configuration String from the Main Computer:");
-        if (input) {
-            try {
-                const decoded = atob(input);
-                const parsed = JSON.parse(decoded);
-                saveERPConfig(parsed);
-                alert("Configuration Loaded! App will restart to sync.");
-                window.location.reload();
-            } catch (e) {
-                showToast("Invalid Configuration String", "error");
+    const handleImportSubmit = () => {
+        if (!importCode.trim()) {
+            showToast("Please paste the code first.", "error");
+            return;
+        }
+
+        try {
+            const cleanedCode = importCode.trim();
+            const decoded = atob(cleanedCode);
+            const parsed = JSON.parse(decoded);
+            
+            // Basic validation
+            if(!parsed.apiKey || !parsed.projectId) {
+                throw new Error("Invalid config format");
             }
+
+            saveERPConfig(parsed);
+            
+            // Success feedback
+            const confirmReload = window.confirm("Configuration Verified! Click OK to restart and sync with the main computer.");
+            if (confirmReload) {
+                window.location.reload();
+            }
+        } catch (e) {
+            console.error(e);
+            showToast("Invalid Configuration Code. Please check and try again.", "error");
         }
     };
 
@@ -95,15 +144,41 @@ const ERPNetwork: React.FC = () => {
                 <div className="bg-surface p-8 rounded-lg shadow-md">
                     <div className="flex justify-between items-center mb-6">
                         <h3 className="text-xl font-bold text-on-surface">Connection Settings</h3>
-                        {!isConnected && (
-                             <button onClick={handleImportString} className="text-sm text-primary hover:underline">
-                                 Have a code? Import here
+                        {!isConnected && !isImporting && (
+                             <button onClick={() => setIsImporting(true)} className="text-sm text-primary hover:underline font-bold flex items-center gap-1">
+                                 <DownloadIcon /> Have a code? Import here
                              </button>
                         )}
                     </div>
 
                     <div className="space-y-4">
-                         {!isConnected ? (
+                        {isImporting ? (
+                            <div className="bg-background p-4 rounded border-2 border-primary/20 animate-fade-in-down">
+                                <h4 className="font-bold text-on-surface mb-2">Import Configuration</h4>
+                                <p className="text-xs text-on-surface/70 mb-3">Paste the code generated from the Main Computer below:</p>
+                                <textarea 
+                                    value={importCode}
+                                    onChange={(e) => setImportCode(e.target.value)}
+                                    className="w-full p-2 border border-on-surface/20 rounded h-24 text-xs font-mono bg-surface text-on-surface resize-none focus:ring-2 focus:ring-primary focus:border-primary outline-none"
+                                    placeholder="Paste code here (e.g., eyJhcGlLZXkiOi...)"
+                                    autoFocus
+                                />
+                                <div className="flex justify-end gap-3 mt-3">
+                                    <button 
+                                        onClick={() => { setIsImporting(false); setImportCode(''); }} 
+                                        className="px-4 py-2 text-sm text-on-surface/70 hover:bg-on-surface/10 rounded"
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button 
+                                        onClick={handleImportSubmit} 
+                                        className="px-4 py-2 text-sm bg-primary text-white font-bold rounded hover:bg-indigo-600 shadow-md"
+                                    >
+                                        Verify & Connect
+                                    </button>
+                                </div>
+                            </div>
+                        ) : !isConnected ? (
                              <>
                                 <p className="text-sm text-on-surface/70 mb-4">
                                     To connect more than 2 computers, enter your Firebase Project credentials below. 
@@ -112,18 +187,17 @@ const ERPNetwork: React.FC = () => {
                                 </p>
                                 <div className="grid grid-cols-1 gap-4">
                                     <div>
-                                        <label className="block text-xs font-bold text-on-surface uppercase mb-1">API Key</label>
-                                        <input name="apiKey" value={config.apiKey} onChange={handleChange} className="w-full p-2 border border-on-surface/20 rounded bg-background text-on-surface" placeholder="AIza..." />
+                                        <label className="block text-xs font-bold text-on-surface uppercase mb-1">API Key <span className="text-red-500">*</span></label>
+                                        <input name="apiKey" value={config.apiKey} onChange={handleChange} className="w-full p-2 border border-on-surface/20 rounded bg-background text-on-surface" placeholder="Starts with AIza..." />
+                                        <p className="text-[10px] text-on-surface/40">Found in Project Settings > General > Web API Key</p>
                                     </div>
-                                    <div className="grid grid-cols-2 gap-4">
-                                        <div>
-                                            <label className="block text-xs font-bold text-on-surface uppercase mb-1">Project ID</label>
-                                            <input name="projectId" value={config.projectId} onChange={handleChange} className="w-full p-2 border border-on-surface/20 rounded bg-background text-on-surface" />
-                                        </div>
-                                        <div>
-                                            <label className="block text-xs font-bold text-on-surface uppercase mb-1">Auth Domain</label>
-                                            <input name="authDomain" value={config.authDomain} onChange={handleChange} className="w-full p-2 border border-on-surface/20 rounded bg-background text-on-surface" />
-                                        </div>
+                                    <div>
+                                        <label className="block text-xs font-bold text-on-surface uppercase mb-1">Project ID <span className="text-red-500">*</span></label>
+                                        <input name="projectId" value={config.projectId} onChange={handleChange} className="w-full p-2 border border-on-surface/20 rounded bg-background text-on-surface" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-bold text-on-surface uppercase mb-1">Auth Domain (Optional)</label>
+                                        <input name="authDomain" value={config.authDomain} onChange={handleChange} className="w-full p-2 border border-on-surface/20 rounded bg-background text-on-surface" placeholder="project-id.firebaseapp.com" />
                                     </div>
                                     <button 
                                         onClick={() => setShowConfigParams(!showConfigParams)}
@@ -223,6 +297,12 @@ const CopyIcon = () => (
 const LockIcon = ({ className }: { className?: string }) => (
     <svg xmlns="http://www.w3.org/2000/svg" className={`h-6 w-6 ${className}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+    </svg>
+);
+
+const DownloadIcon = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
     </svg>
 );
 

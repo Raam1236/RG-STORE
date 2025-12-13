@@ -35,6 +35,7 @@ if (isCloud) {
     console.log("Firebase Connected");
   } catch (error) {
     console.error("Firebase Initialization Error:", error);
+    // DO NOT crash here. db stays null.
   }
 }
 
@@ -302,6 +303,7 @@ const database = {
   // --- Auth ---
   async login(usernameOrEmail: string, password: string): Promise<User | null> {
     if (isCloud) {
+      if (!auth) return null; // Safe guard if init failed
       try {
         const userCredential = await signInWithEmailAndPassword(auth, usernameOrEmail, password);
         const fbUser = userCredential.user;
@@ -325,6 +327,7 @@ const database = {
 
   async registerAdmin(user: User, password: string): Promise<boolean> {
     if (isCloud) {
+      if (!auth || !db) return false;
       try {
         const email = user.username.includes('@') ? user.username : `${user.username}@rgshop.com`;
         const userCredential = await createUserWithEmailAndPassword(auth, email, password);
@@ -349,6 +352,7 @@ const database = {
 
   async updateCurrentUserCredentials(userId: string, newUsername?: string, newPassword?: string): Promise<boolean> {
       if (isCloud) {
+         if (!auth || !db) return false;
          try {
              const user = auth.currentUser;
              if (user && user.uid === userId) {
@@ -375,6 +379,7 @@ const database = {
   // --- Products ---
   async getProducts(): Promise<Product[]> {
     if (isCloud) {
+      if (!db) { console.warn("DB not ready"); return []; }
       // Optimizing Firestore Read
       const querySnapshot = await getDocs(collection(db, "products"));
       return querySnapshot.docs.map(docData => {
@@ -396,6 +401,7 @@ const database = {
 
   async saveProduct(product: Product): Promise<void> {
     if (isCloud) {
+      if (!db) return;
       const docRef = doc(db, "products", product.id);
       const productData = {
           name: product.name,
@@ -415,13 +421,18 @@ const database = {
   },
   
   async deleteProduct(productId: string): Promise<void> {
-      if (isCloud) await deleteDoc(doc(db, "products", productId));
-      else sqlite.delete_product(productId);
+      if (isCloud) {
+          if (!db) return;
+          await deleteDoc(doc(db, "products", productId));
+      } else {
+          sqlite.delete_product(productId);
+      }
   },
 
   // --- Sales ---
   async getSales(limitCount?: number): Promise<Sale[]> {
     if (isCloud) {
+      if (!db) return [];
       let q;
       // Optimize Cloud: If limit provided (e.g. for dashboard recent activity), use it.
       // Note: We normally need ALL sales for total revenue stats. 
@@ -453,6 +464,7 @@ const database = {
 
   async addSale(sale: Sale): Promise<void> {
     if (isCloud) {
+      if (!db) return;
       const invoiceNumber = generateInvoiceNumber();
       const shopDetails = await this.getShopDetails();
       const saleRecord = {
@@ -478,6 +490,7 @@ const database = {
   // --- Customers ---
   async getCustomers(): Promise<Customer[]> {
     if (isCloud) {
+      if (!db) return [];
       const querySnapshot = await getDocs(collection(db, "customers"));
       return querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Customer));
     } else {
@@ -486,18 +499,27 @@ const database = {
   },
 
   async saveCustomer(customer: Customer): Promise<void> {
-    if (isCloud) await setDoc(doc(db, "customers", customer.id), customer, { merge: true });
-    else sqlite.save_customer(customer);
+    if (isCloud) {
+        if (!db) return;
+        await setDoc(doc(db, "customers", customer.id), customer, { merge: true });
+    } else {
+        sqlite.save_customer(customer);
+    }
   },
   
   async deleteCustomer(customerId: string): Promise<void> {
-      if (isCloud) await deleteDoc(doc(db, "customers", customerId));
-      else sqlite.delete_customer(customerId);
+      if (isCloud) {
+          if (!db) return;
+          await deleteDoc(doc(db, "customers", customerId));
+      } else {
+          sqlite.delete_customer(customerId);
+      }
   },
 
   // --- Employees ---
   async getEmployees(): Promise<User[]> {
     if (isCloud) {
+       if (!db) return [];
        const q = query(collection(db, "users"), where("role", "==", Role.EMPLOYEE));
        const querySnapshot = await getDocs(q);
        return querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as User));
@@ -508,6 +530,7 @@ const database = {
 
   async saveEmployee(user: User, password?: string): Promise<void> {
       if (isCloud) {
+          if (!db) return;
           await setDoc(doc(db, "users", user.id), { ...user, password, createdAt: serverTimestamp() }); 
       } else {
           sqlite.save_employee(user, password);
@@ -515,13 +538,18 @@ const database = {
   },
   
   async deleteEmployee(userId: string): Promise<void> {
-      if(isCloud) await deleteDoc(doc(db, "users", userId));
-      else sqlite.delete_user(userId);
+      if(isCloud) {
+          if (!db) return;
+          await deleteDoc(doc(db, "users", userId));
+      } else {
+          sqlite.delete_user(userId);
+      }
   },
 
   // --- Shop Details ---
   async getShopDetails(): Promise<ShopDetails | null> {
     if (isCloud) {
+        if (!db) return null;
         const docRef = doc(db, "settings", "shop_details");
         const docSnap = await getDoc(docRef);
         return docSnap.exists() ? docSnap.data() as ShopDetails : null;
@@ -531,8 +559,12 @@ const database = {
   },
 
   async saveShopDetails(details: ShopDetails): Promise<void> {
-    if (isCloud) await setDoc(doc(db, "settings", "shop_details"), details);
-    else sqlite.save_shop_details(details);
+    if (isCloud) {
+        if (!db) return;
+        await setDoc(doc(db, "settings", "shop_details"), details);
+    } else {
+        sqlite.save_shop_details(details);
+    }
   },
 
   // --- Backup / Restore ---
