@@ -250,6 +250,12 @@ class SQLiteSimulator {
         customers = customers.filter((c: any) => c.id !== id);
         this.saveTable('table_customers', customers);
     }
+    
+    // NEW: Get customer by mobile for POS lookup
+    get_customer_by_mobile(mobile: string): Customer | undefined {
+        const customers = this.getTable('table_customers');
+        return customers.find((c: any) => c.mobile === mobile);
+    }
 
     get_shop_details(): ShopDetails | null {
         return this.shopDetailsCache;
@@ -453,7 +459,9 @@ const database = {
               total: data.totalAmount,
               employeeId: data.generatedByEmployeeId,
               customerName: data.customerName,
-              customerMobile: data.customerMobile
+              customerMobile: data.customerMobile,
+              walletRedeemed: data.walletRedeemed || 0,
+              walletEarned: data.walletEarned || 0,
           } as Sale;
       });
     } else {
@@ -476,6 +484,8 @@ const database = {
             productId: item.id, name: item.name, brand: item.brand, unitPrice: item.price, quantity: item.quantity, totalItemPrice: item.price * item.quantity
         })),
         totalAmount: sale.total,
+        walletRedeemed: sale.walletRedeemed || 0,
+        walletEarned: sale.walletEarned || 0,
         generatedByEmployeeId: sale.employeeId,
         shopDetails: shopDetails || { name: "RG Shop" },
         thankYouMessage: "THANK YOU ❣️",
@@ -496,6 +506,22 @@ const database = {
     } else {
       return sqlite.get_all_customers();
     }
+  },
+  
+  // Quick lookup for POS
+  async getCustomerByMobile(mobile: string): Promise<Customer | null> {
+      if (isCloud) {
+          if (!db) return null;
+          const q = query(collection(db, "customers"), where("mobile", "==", mobile), limit(1));
+          const querySnapshot = await getDocs(q);
+          if (!querySnapshot.empty) {
+              const doc = querySnapshot.docs[0];
+              return { id: doc.id, ...doc.data() } as Customer;
+          }
+          return null;
+      } else {
+          return sqlite.get_customer_by_mobile(mobile) || null;
+      }
   },
 
   async saveCustomer(customer: Customer): Promise<void> {

@@ -38,7 +38,9 @@ export interface Customer {
   name: string;
   mobile: string;
   email?: string;
-  loyaltyPoints: number;
+  loyaltyPoints: number; // Legacy points, can serve as 'tier' points
+  walletBalance: number; // Actual currency for redemption
+  isMember: boolean; // Membership status
   photo?: string; // Base64 string of the customer's face
   faceAttributes?: string; // AI description (e.g., "Male, approx 30s, glasses")
 }
@@ -61,6 +63,8 @@ export interface Sale {
   customerMobile?: string;
   paymentMethod?: 'CASH' | 'UPI' | 'NET_BANKING';
   taxAmount?: number;
+  walletRedeemed?: number; // Amount paid via wallet
+  walletEarned?: number; // 5% cashback earned
 }
 
 export interface ShopDetails {

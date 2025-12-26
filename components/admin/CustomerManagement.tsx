@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+
+import React, { useState, useRef } from 'react';
 import { useAppContext } from '../../hooks/useAppContext';
 import { Customer, Sale } from '../../types';
 import database from '../../services/database';
@@ -15,11 +16,16 @@ const CustomerForm: React.FC<CustomerFormProps> = ({ customer, onSave, onCancel 
         mobile: customer?.mobile || '',
         email: customer?.email || '',
         loyaltyPoints: customer?.loyaltyPoints || 0,
+        walletBalance: customer?.walletBalance || 0,
+        isMember: customer?.isMember || false
     });
 
     const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const { name, value, type } = e.target;
-        setFormData(prev => ({ ...prev, [name]: type === 'number' ? parseInt(value, 10) : value }));
+        const { name, value, type, checked } = e.target;
+        setFormData(prev => ({ 
+            ...prev, 
+            [name]: type === 'checkbox' ? checked : (type === 'number' ? parseInt(value, 10) : value) 
+        }));
     };
 
     const handleSubmit = (e: React.FormEvent) => {
@@ -35,9 +41,24 @@ const CustomerForm: React.FC<CustomerFormProps> = ({ customer, onSave, onCancel 
                     <input name="name" value={formData.name} onChange={handleChange} placeholder="Customer Name" className="w-full p-3 bg-background border border-on-surface/20 rounded-md text-on-surface" required />
                     <input name="mobile" value={formData.mobile} onChange={handleChange} placeholder="Mobile Number" className="w-full p-3 bg-background border border-on-surface/20 rounded-md text-on-surface" required />
                     <input name="email" type="email" value={formData.email} onChange={handleChange} placeholder="Email (Optional)" className="w-full p-3 bg-background border border-on-surface/20 rounded-md text-on-surface" />
-                    <input name="loyaltyPoints" type="number" value={formData.loyaltyPoints} onChange={handleChange} placeholder="Loyalty Points" className="w-full p-3 bg-background border border-on-surface/20 rounded-md text-on-surface" required />
+                    <div className="flex gap-4">
+                         <div className="flex-1">
+                            <label className="text-xs text-on-surface">Points</label>
+                            <input name="loyaltyPoints" type="number" value={formData.loyaltyPoints} onChange={handleChange} placeholder="Loyalty Points" className="w-full p-3 bg-background border border-on-surface/20 rounded-md text-on-surface" />
+                         </div>
+                         <div className="flex-1">
+                            <label className="text-xs text-on-surface">Wallet (₹)</label>
+                            <input name="walletBalance" type="number" value={formData.walletBalance} onChange={handleChange} placeholder="Wallet Balance" className="w-full p-3 bg-background border border-on-surface/20 rounded-md text-on-surface" />
+                         </div>
+                    </div>
+                    
+                    <div className="flex items-center gap-2">
+                        <input type="checkbox" name="isMember" id="isMember" checked={formData.isMember} onChange={handleChange} className="w-5 h-5 text-primary" />
+                        <label htmlFor="isMember" className="text-on-surface font-medium">Is Premium Member</label>
+                    </div>
+
                     <div className="flex justify-end gap-4 pt-4">
-                        <button type="button" onClick={onCancel} className="py-2 px-4 bg-on-surface/10 text-on-surface rounded-md hover:bg-on-surface/20 transition">Cancel</button>
+                        <button type="button" onClick={onCancel} className="py-2 px-4 bg-on-surface/10 text-on-surface rounded-md hover:bg-on-surface/10 transition">Cancel</button>
                         <button type="submit" className="py-2 px-4 bg-primary text-on-primary rounded-md hover:bg-indigo-500 transition">Save</button>
                     </div>
                 </form>
@@ -53,7 +74,6 @@ interface CustomerHistoryModalProps {
 }
 
 const CustomerHistoryModal: React.FC<CustomerHistoryModalProps> = ({ customer, sales, onClose }) => {
-    // Filter sales for this customer based on mobile number
     const customerSales = sales.filter(s => s.customerMobile === customer.mobile).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
     return (
@@ -86,6 +106,11 @@ const CustomerHistoryModal: React.FC<CustomerHistoryModalProps> = ({ customer, s
                                             ))}
                                         </ul>
                                     </div>
+                                    {(sale.walletRedeemed && sale.walletRedeemed > 0) && (
+                                        <div className="mt-2 text-xs text-green-600 font-bold bg-green-50 p-1 rounded inline-block">
+                                            Used Wallet: ₹{sale.walletRedeemed}
+                                        </div>
+                                    )}
                                 </div>
                             ))}
                         </div>
@@ -104,11 +129,141 @@ const CustomerHistoryModal: React.FC<CustomerHistoryModalProps> = ({ customer, s
     );
 };
 
+// --- MEMBERSHIP MODAL ---
+const QRCodeCanvas: React.FC<{ value: string }> = ({ value }) => {
+    const canvasRef = useRef<HTMLCanvasElement>(null);
+    React.useEffect(() => {
+        if (canvasRef.current && (window as any).QRCode) {
+            (window as any).QRCode.toCanvas(canvasRef.current, value, { width: 70, height: 70, margin: 0, color: { dark: '#444444', light: '#ffffff' } }, (e: any) => {});
+        }
+    }, [value]);
+    return <canvas ref={canvasRef} />;
+};
+
+interface MembershipModalProps {
+    customer: Customer;
+    onClose: () => void;
+    onUpgrade: (c: Customer) => void;
+}
+
+const MembershipModal: React.FC<MembershipModalProps> = ({ customer, onClose, onUpgrade }) => {
+    const { showToast } = useAppContext();
+    const [step, setStep] = useState<'verify' | 'card'>('verify');
+    const [otpSent, setOtpSent] = useState(false);
+    const [otp, setOtp] = useState('');
+    const generatedOtp = useRef('');
+
+    const sendOtp = () => {
+        generatedOtp.current = Math.floor(1000 + Math.random() * 9000).toString();
+        setOtpSent(true);
+        alert(`SMS sent to ${customer.mobile}: Your Membership Verification Code is ${generatedOtp.current}`);
+    };
+
+    const verifyOtp = () => {
+        if (otp === generatedOtp.current) {
+            const updatedCustomer = { ...customer, isMember: true };
+            onUpgrade(updatedCustomer);
+            setStep('card');
+            showToast("Membership verified successfully!");
+        } else {
+            showToast("Invalid OTP", "error");
+        }
+    };
+
+    if (customer.isMember && step === 'verify') {
+        setStep('card');
+    }
+
+    return (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 backdrop-blur-sm" onClick={onClose}>
+            <div className="bg-surface p-6 rounded-xl shadow-2xl w-full max-w-lg" onClick={e => e.stopPropagation()}>
+                {step === 'verify' ? (
+                    <div className="text-center space-y-4">
+                        <div className="w-16 h-16 bg-yellow-100 rounded-full flex items-center justify-center mx-auto text-yellow-600">
+                            <CrownIcon />
+                        </div>
+                        <h2 className="text-2xl font-bold text-on-surface">Create Membership</h2>
+                        <p className="text-sm text-on-surface/60">Verify {customer.name}'s mobile number ({customer.mobile}) to generate a Digital Card.</p>
+                        
+                        {!otpSent ? (
+                            <button onClick={sendOtp} className="w-full py-3 bg-primary text-white font-bold rounded-lg hover:bg-indigo-600 transition">
+                                Send Verification OTP
+                            </button>
+                        ) : (
+                            <div className="animate-fade-in-up">
+                                <input 
+                                    type="text" 
+                                    placeholder="Enter 4-digit OTP" 
+                                    className="w-full text-center text-2xl tracking-widest p-3 border-2 border-primary rounded-lg mb-4 text-on-surface bg-background"
+                                    maxLength={4}
+                                    value={otp}
+                                    onChange={(e) => setOtp(e.target.value)}
+                                />
+                                <button onClick={verifyOtp} className="w-full py-3 bg-green-600 text-white font-bold rounded-lg hover:bg-green-700 transition">
+                                    Verify & Create Card
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                ) : (
+                    <div className="flex flex-col items-center animate-fade-in-down">
+                        <h2 className="text-xl font-bold text-on-surface mb-6">Digital Membership Card</h2>
+                        
+                        {/* THE CARD - Redesigned to match the provided gold theme */}
+                        <div className="relative w-full aspect-[1.586] bg-gradient-to-br from-[#f6e08a] via-[#e2c14c] to-[#d4af37] rounded-3xl overflow-hidden shadow-[0_20px_50px_rgba(0,0,0,0.3)] text-[#5d4d1f] p-10 flex flex-col justify-between select-none">
+                            {/* Chip Icon */}
+                            <div className="absolute top-28 left-10 w-16 h-12 bg-gradient-to-r from-[#b38e21] to-[#8a6d19] rounded-md grid grid-cols-2 grid-rows-3 gap-px p-1 overflow-hidden shadow-inner opacity-60">
+                                {[...Array(6)].map((_, i) => <div key={i} className="border border-[#725a15]/30"></div>)}
+                            </div>
+
+                            {/* Top Row: Label and Square Placeholder */}
+                            <div className="flex justify-between items-start z-10 w-full">
+                                <div>
+                                    <h3 className="text-2xl font-bold tracking-widest uppercase opacity-60">GOLD MEMBER</h3>
+                                </div>
+                                <div className="text-right">
+                                    {/* White square placeholder for QR or Photo */}
+                                    <div className="bg-white/90 p-2 rounded-xl border-2 border-white shadow-lg w-24 h-24 flex items-center justify-center">
+                                        <QRCodeCanvas value={customer.id} />
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            {/* Bottom Row: Customer Info and Branding */}
+                            <div className="z-10 w-full flex justify-between items-end">
+                                <div className="space-y-1">
+                                    <p className="text-3xl font-black tracking-widest uppercase drop-shadow-sm mb-2">{customer.name}</p>
+                                    <p className="font-mono text-xl font-bold tracking-[0.2em]">{customer.mobile}</p>
+                                </div>
+                                <div className="text-right">
+                                    <p className="text-xs font-bold tracking-widest uppercase opacity-60">RG SHOP LOYALTY</p>
+                                </div>
+                            </div>
+
+                            {/* Subtle Texture Overlay */}
+                            <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/brushed-alum.png')] opacity-10 pointer-events-none"></div>
+                        </div>
+
+                        <div className="mt-8 flex gap-3 w-full">
+                            <button onClick={onClose} className="flex-1 py-3 text-on-surface border border-on-surface/20 rounded-xl font-bold hover:bg-on-surface/5 transition-colors">Close</button>
+                            <button onClick={() => window.print()} className="flex-[2] py-3 bg-[#d4af37] text-white font-bold rounded-xl shadow-lg hover:bg-[#b38e21] transition-all transform hover:scale-105 active:scale-95 flex items-center justify-center gap-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M5 4v3H4a2 2 0 00-2 2v6a2 2 0 002 2h12a2 2 0 002-2V9a2 2 0 00-2-2h-1V4a2 2 0 00-2-2H7a2 2 0 00-2 2zm8 0H7v3h6V4zm0 8H7v4h6v-4z" clipRule="evenodd" /></svg>
+                                Print Card
+                            </button>
+                        </div>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+};
+
 const CustomerManagement: React.FC = () => {
     const { customers, setCustomers, sales, showToast } = useAppContext();
     const [isFormOpen, setIsFormOpen] = useState(false);
     const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
     const [historyCustomer, setHistoryCustomer] = useState<Customer | null>(null);
+    const [membershipCustomer, setMembershipCustomer] = useState<Customer | null>(null);
 
     const handleSaveCustomer = async (customer: Customer) => {
         await database.saveCustomer(customer);
@@ -121,6 +276,11 @@ const CustomerManagement: React.FC = () => {
         }
         setIsFormOpen(false);
         setEditingCustomer(null);
+    };
+    
+    const handleMembershipUpgrade = async (customer: Customer) => {
+        await database.saveCustomer(customer);
+        setCustomers(customers.map(c => c.id === customer.id ? customer : c));
     };
 
     const handleDeleteCustomer = async (customerId: string) => {
@@ -137,7 +297,7 @@ const CustomerManagement: React.FC = () => {
             return;
         }
 
-        const headers = ['ID', 'Name', 'Mobile', 'Email', 'Loyalty Points'];
+        const headers = ['ID', 'Name', 'Mobile', 'Email', 'Loyalty Points', 'Wallet Balance'];
         const csvRows = [headers.join(',')];
 
         const escapeCsvField = (field: any): string => {
@@ -154,7 +314,8 @@ const CustomerManagement: React.FC = () => {
                 escapeCsvField(customer.name),
                 escapeCsvField(customer.mobile),
                 escapeCsvField(customer.email),
-                escapeCsvField(customer.loyaltyPoints)
+                escapeCsvField(customer.loyaltyPoints),
+                escapeCsvField(customer.walletBalance)
             ];
             csvRows.push(row.join(','));
         });
@@ -194,19 +355,29 @@ const CustomerManagement: React.FC = () => {
                         <tr>
                             <th className="p-4 text-on-surface font-semibold">Name</th>
                             <th className="p-4 text-on-surface font-semibold">Mobile</th>
-                            <th className="p-4 text-on-surface font-semibold">Email</th>
-                            <th className="p-4 text-on-surface font-semibold">Loyalty Points</th>
+                            <th className="p-4 text-on-surface font-semibold">Status</th>
+                            <th className="p-4 text-on-surface font-semibold">Wallet</th>
                             <th className="p-4 text-on-surface font-semibold text-right">Actions</th>
                         </tr>
                     </thead>
                     <tbody>
                         {customers.map(customer => (
                             <tr key={customer.id} className="border-b border-on-surface/20 hover:bg-on-surface/5">
-                                <td className="p-4 text-on-surface">{customer.name}</td>
+                                <td className="p-4 text-on-surface">
+                                    <div className="font-semibold">{customer.name}</div>
+                                    <div className="text-xs text-on-surface/60">{customer.email}</div>
+                                </td>
                                 <td className="p-4 text-on-surface">{customer.mobile}</td>
-                                <td className="p-4 text-on-surface">{customer.email || 'N/A'}</td>
-                                <td className="p-4 text-on-surface">{customer.loyaltyPoints}</td>
+                                <td className="p-4 text-on-surface">
+                                    {customer.isMember ? (
+                                        <span className="bg-yellow-100 text-yellow-800 text-xs px-2 py-1 rounded-full font-bold border border-yellow-300">PREMIUM</span>
+                                    ) : (
+                                        <span className="bg-gray-100 text-gray-600 text-xs px-2 py-1 rounded-full font-bold">Standard</span>
+                                    )}
+                                </td>
+                                <td className="p-4 text-on-surface font-mono font-bold text-green-600">₹{customer.walletBalance.toFixed(2)}</td>
                                 <td className="p-4 text-right space-x-2">
+                                    <button onClick={() => setMembershipCustomer(customer)} className="p-2 text-on-surface/60 hover:text-yellow-600 transition" title="Membership Card"><CrownIcon /></button>
                                     <button onClick={() => setHistoryCustomer(customer)} className="p-2 text-on-surface/60 hover:text-secondary transition" title="View Purchase History"><ClockIcon /></button>
                                     <button onClick={() => { setEditingCustomer(customer); setIsFormOpen(true); }} className="p-2 text-on-surface/60 hover:text-primary transition" title="Edit Customer"><PencilIcon /></button>
                                     <button onClick={() => handleDeleteCustomer(customer.id)} className="p-2 text-on-surface/60 hover:text-red-500 transition" title="Delete Customer"><TrashIcon /></button>
@@ -224,15 +395,17 @@ const CustomerManagement: React.FC = () => {
 
             {isFormOpen && <CustomerForm customer={editingCustomer} onSave={handleSaveCustomer} onCancel={() => setIsFormOpen(false)} />}
             {historyCustomer && <CustomerHistoryModal customer={historyCustomer} sales={sales} onClose={() => setHistoryCustomer(null)} />}
+            {membershipCustomer && <MembershipModal customer={membershipCustomer} onClose={() => setMembershipCustomer(null)} onUpgrade={handleMembershipUpgrade} />}
         </div>
     );
 };
 
 // Icons
-const PlusIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clipRule="evenodd" /></svg>;
+const PlusIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M10 3a1 1 0 011 1v1.323l3.954 1.582 1.699-3.181a1 1 0 011.827 1.035l-1.74 3.258 2.553 1.022A1 1 0 0120 9v9a1 1 0 01-1 1H1a1 1 0 01-1-1V9a1 1 0 01.707-1.284l2.553-1.022-1.74-3.258a1 1 0 011.827-1.035L5.046 5.623 9 4.04V3a1 1 0 011-1z" clipRule="evenodd" /></svg>;
 const PencilIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M17.414 2.586a2 2 0 00-2.828 0L7 10.172V13h2.828l7.586-7.586a2 2 0 000-2.828z" /><path fillRule="evenodd" d="M2 6a2 2 0 012-2h4a1 1 0 010 2H4v10h10v-4a1 1 0 112 0v4a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" clipRule="evenodd" /></svg>;
 const TrashIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm4 0a1 1 0 012 0v6a1 1 0 11-2 0V8z" clipRule="evenodd" /></svg>;
 const DownloadIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM6.293 9.293a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clipRule="evenodd" /></svg>;
 const ClockIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clipRule="evenodd" /></svg>;
+const CrownIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M10 2a1 1 0 011 1v1.323l3.954 1.582 1.699-3.181a1 1 0 011.827 1.035l-1.74 3.258 2.553 1.022A1 1 0 0120 9v9a1 1 0 01-1 1H1a1 1 0 01-1-1V9a1 1 0 01.707-1.284l2.553-1.022-1.74-3.258a1 1 0 011.827-1.035L5.046 5.623 9 4.04V3a1 1 0 011-1z" clipRule="evenodd" /></svg>;
 
 export default CustomerManagement;

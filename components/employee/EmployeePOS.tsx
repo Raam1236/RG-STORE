@@ -1,26 +1,56 @@
+
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { useAppContext } from '../../hooks/useAppContext';
-import { Product, BillItem, Bill } from '../../types';
+import { Product, BillItem, Bill, Customer } from '../../types';
 import InvoiceModal from './InvoiceModal';
 import QRScannerModal from './QRScannerModal';
 import VisualScannerModal from './VisualScannerModal';
 import CustomerFaceCamera from './CustomerFaceCamera';
 import MarketNews from './MarketNews';
 import { processVoiceCommand, analyzeImageForBilling, getSmartUpsellSuggestion } from '../../services/geminiService';
+import database from '../../services/database';
 
 // --- PAYMENT MODAL COMPONENT ---
 interface PaymentModalProps {
     isOpen: boolean;
     onClose: () => void;
     bill: Bill;
-    onConfirm: (method: 'CASH' | 'UPI' | 'NET_BANKING') => void;
+    onConfirm: (method: 'CASH' | 'UPI' | 'NET_BANKING', walletRedeemed: number) => void;
     upiId?: string;
     shopName: string;
 }
 
 const PaymentModal: React.FC<PaymentModalProps> = ({ isOpen, onClose, bill, onConfirm, upiId, shopName }) => {
+    const { showToast } = useAppContext();
     const [method, setMethod] = useState<'CASH' | 'UPI' | 'NET_BANKING'>('CASH');
     const [qrError, setQrError] = useState<string | null>(null);
+    const [customer, setCustomer] = useState<Customer | null>(null);
+    const [useWallet, setUseWallet] = useState(false);
+    
+    // Look up customer on mount
+    useEffect(() => {
+        const fetchCustomer = async () => {
+            if (bill.customerMobile) {
+                const c = await database.getCustomerByMobile(bill.customerMobile);
+                setCustomer(c);
+            }
+        };
+        fetchCustomer();
+    }, [bill.customerMobile]);
+
+    // Calculate financials
+    const walletBalance = customer?.walletBalance || 0;
+    const maxRedeemable = Math.min(walletBalance, bill.total);
+    // Wallet redemption is now direct without OTP
+    const redeemAmount = useWallet ? maxRedeemable : 0;
+    const finalPayable = Math.max(0, bill.total - redeemAmount);
+    
+    const handleWalletCheck = () => {
+        setUseWallet(!useWallet);
+        if (!useWallet) {
+            showToast("Wallet balance applied to bill.");
+        }
+    };
 
     // Helper to ensure QR Lib is loaded
     const ensureQrLib = async (): Promise<any> => {
@@ -63,12 +93,12 @@ const PaymentModal: React.FC<PaymentModalProps> = ({ isOpen, onClose, bill, onCo
 
             startGeneration();
         }
-    }, [method, upiId, bill.total, shopName]);
+    }, [method, upiId, finalPayable, shopName]);
 
     const generate = (canvas: HTMLCanvasElement, lib: any) => {
         try {
              // UPI String Format: upi://pay?pa=UPI_ID&pn=NAME&am=AMOUNT&cu=INR
-             const upiString = `upi://pay?pa=${upiId}&pn=${encodeURIComponent(shopName)}&am=${bill.total.toFixed(2)}&cu=INR`;
+             const upiString = `upi://pay?pa=${upiId}&pn=${encodeURIComponent(shopName)}&am=${finalPayable.toFixed(2)}&cu=INR`;
              
              // Check if toCanvas exists (node-qrcode style)
              if (lib.toCanvas) {
@@ -105,13 +135,39 @@ const PaymentModal: React.FC<PaymentModalProps> = ({ isOpen, onClose, bill, onCo
             <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden animate-fade-in-up">
                 <div className="bg-blue-600 p-4 text-white text-center">
                     <h2 className="text-xl font-bold">Select Payment Mode</h2>
-                    <p className="text-blue-100 text-sm">Total Payable: <span className="text-white font-mono text-lg font-bold">₹{bill.total.toFixed(2)}</span></p>
+                    <p className="text-blue-100 text-sm">Bill Total: <span className="text-white font-mono text-lg font-bold">₹{bill.total.toFixed(2)}</span></p>
                 </div>
                 
                 <div className="p-6">
+                    {/* Wallet Section */}
+                    {customer && customer.isMember && walletBalance > 0 && (
+                        <div className={`mb-4 border rounded-lg p-3 transition-all ${useWallet ? 'bg-green-50 border-green-200' : 'bg-yellow-50 border-yellow-200'}`}>
+                            <div className="flex justify-between items-center mb-2">
+                                <span className="text-sm font-bold text-yellow-800 flex items-center gap-1">
+                                    <span className="text-lg">👑</span> Wallet Balance
+                                </span>
+                                <span className="font-mono font-bold text-yellow-900">₹{walletBalance.toFixed(2)}</span>
+                            </div>
+                            
+                            <label className="flex items-center gap-2 cursor-pointer select-none">
+                                <input 
+                                    type="checkbox" 
+                                    checked={useWallet} 
+                                    onChange={handleWalletCheck}
+                                    className="w-5 h-5 text-yellow-600 rounded focus:ring-yellow-500"
+                                />
+                                <span className="text-sm text-gray-700">
+                                    {useWallet ? 
+                                        <span className="font-bold text-green-700">Balance Applied! (-₹{maxRedeemable.toFixed(2)})</span> : 
+                                        <span>Redeem <span className="font-bold">₹{maxRedeemable.toFixed(2)}</span></span>
+                                    }
+                                </span>
+                            </label>
+                        </div>
+                    )}
+
                     <div className="grid grid-cols-3 gap-3 mb-6">
-                        {/* UPDATED: Cash button now immediately confirms the payment for speed */}
-                        <button onClick={() => onConfirm('CASH')} className={`p-3 rounded-lg border-2 flex flex-col items-center gap-1 transition-all border-green-600 bg-green-50 text-green-700 hover:bg-green-100 hover:shadow-lg transform hover:scale-105 active:scale-95`}>
+                        <button onClick={() => onConfirm('CASH', redeemAmount)} className={`p-3 rounded-lg border-2 flex flex-col items-center gap-1 transition-all border-green-600 bg-green-50 text-green-700 hover:bg-green-100 hover:shadow-lg transform hover:scale-105 active:scale-95`}>
                             <span className="text-2xl">💵</span>
                             <span className="text-xs font-bold">CASH (Direct)</span>
                         </button>
@@ -129,8 +185,9 @@ const PaymentModal: React.FC<PaymentModalProps> = ({ isOpen, onClose, bill, onCo
                         {method === 'CASH' && (
                             <div className="text-center">
                                 <p className="text-gray-500 mb-2">Cash Payment Selected</p>
-                                <div className="text-4xl font-bold text-slate-800">₹{bill.total.toFixed(2)}</div>
-                                <p className="text-xs text-green-600 mt-2 font-bold animate-pulse">Click "CASH (Direct)" above for instant bill</p>
+                                <div className="text-4xl font-bold text-slate-800">₹{finalPayable.toFixed(2)}</div>
+                                {useWallet && <p className="text-xs text-green-600 mt-1 font-bold animate-pulse">Wallet Redeemed: -₹{redeemAmount.toFixed(2)}</p>}
+                                <p className="text-xs text-gray-400 mt-2 font-semibold">Click "CASH (Direct)" above for instant bill</p>
                             </div>
                         )}
 
@@ -148,7 +205,8 @@ const PaymentModal: React.FC<PaymentModalProps> = ({ isOpen, onClose, bill, onCo
                                             )}
                                         </div>
                                         <p className="text-xs text-gray-500 font-mono mb-1">ID: {upiId}</p>
-                                        <p className="text-sm font-bold text-blue-600 animate-pulse">Scan & Pay</p>
+                                        <p className="text-sm font-bold text-blue-600 animate-pulse">Scan & Pay ₹{finalPayable.toFixed(2)}</p>
+                                        {useWallet && <p className="text-xs text-green-600 font-bold">Wallet Applied</p>}
                                     </>
                                 ) : (
                                     <p className="text-red-500 text-sm font-bold">UPI ID not configured in Admin Settings.</p>
@@ -159,7 +217,7 @@ const PaymentModal: React.FC<PaymentModalProps> = ({ isOpen, onClose, bill, onCo
                         {method === 'NET_BANKING' && (
                             <div className="text-center">
                                 <p className="text-gray-500 text-sm mb-2">Record Net Banking / Card Transaction</p>
-                                <div className="text-2xl font-bold text-slate-800 mb-1">₹{bill.total.toFixed(2)}</div>
+                                <div className="text-2xl font-bold text-slate-800 mb-1">₹{finalPayable.toFixed(2)}</div>
                                 <p className="text-xs text-orange-600 bg-orange-100 px-2 py-1 rounded">Verify payment in bank app manually</p>
                             </div>
                         )}
@@ -168,7 +226,7 @@ const PaymentModal: React.FC<PaymentModalProps> = ({ isOpen, onClose, bill, onCo
 
                 <div className="p-4 bg-gray-100 flex gap-3">
                     <button onClick={onClose} className="flex-1 py-3 text-gray-600 font-bold hover:bg-gray-200 rounded-lg transition-colors">Cancel</button>
-                    <button onClick={() => onConfirm(method)} className="flex-[2] py-3 bg-green-600 text-white font-bold rounded-lg hover:bg-green-700 shadow-md transition-colors flex items-center justify-center gap-2">
+                    <button onClick={() => onConfirm(method, redeemAmount)} className="flex-[2] py-3 bg-green-600 text-white font-bold rounded-lg hover:bg-green-700 shadow-md transition-colors flex items-center justify-center gap-2">
                         <span>✓</span> {method === 'CASH' ? 'Confirm Cash' : 'Payment Received'}
                     </button>
                 </div>
@@ -547,9 +605,42 @@ const EmployeePOS: React.FC = () => {
         setPaymentModalOpen(true);
     };
 
-    const handlePaymentComplete = (method: 'CASH' | 'UPI' | 'NET_BANKING') => {
-        const finalizedBill = { ...currentBill, paymentMethod: method };
+    // Updated payment logic to handle Wallet Redemption and 5% Cashback
+    const handlePaymentComplete = async (method: 'CASH' | 'UPI' | 'NET_BANKING', walletRedeemed = 0) => {
+        // Calculate Earned Amount (5% of Paid Amount)
+        // Paid Amount = Total Bill - Wallet Redemption
+        const paidAmount = currentBill.total - walletRedeemed;
+        const walletEarned = paidAmount > 0 ? (paidAmount * 0.05) : 0;
+
+        const finalizedBill = { 
+            ...currentBill, 
+            paymentMethod: method,
+            walletRedeemed,
+            walletEarned
+        };
+        
+        // Save Sale
         addSale(finalizedBill);
+        
+        // Update Customer Wallet
+        if (currentBill.customerMobile) {
+            const customer = await database.getCustomerByMobile(currentBill.customerMobile);
+            if (customer && customer.isMember) {
+                const currentBalance = customer.walletBalance || 0;
+                const newBalance = currentBalance - walletRedeemed + walletEarned;
+                
+                // Update customer record
+                await database.saveCustomer({
+                    ...customer,
+                    walletBalance: newBalance
+                });
+                
+                if (walletEarned > 0) {
+                     showToast(`₹${walletEarned.toFixed(2)} Cashback Added!`);
+                }
+            }
+        }
+
         setInvoiceReady(finalizedBill);
         setPaymentModalOpen(false);
         setCurrentBill({ customerName: 'Walk-in', customerMobile: '', items: [], subtotal: 0, taxAmount: 0, total: 0 });
